@@ -2,6 +2,7 @@ import jax_dataclasses as jdc
 import jax.numpy as jnp
 from numpy.typing import NDArray
 from typing import Tuple
+from collections.abc import Collection
 from . import (
     PositiveFloat,
     Degrees,
@@ -10,6 +11,56 @@ from . import (
 
 @jdc.pytree_dataclass
 class Ray:
+    x: float
+    y: float
+    dx: float
+    dy: float
+    # Important to also include here for differentiation to work
+    # Part of the matrix to allow constant offsets.
+    # Don't set this as a user, has to be value 1!
+    _one: float = 1.
+
+    def modify(self, x=None, y=None, dx=None, dy=None) -> "Ray":
+        loc = locals()
+        params = {}
+        for key in ('x', 'y', 'dx', 'dy'):
+            ll = loc.get(key, None)
+            if ll is None:
+                ll = getattr(self, key)
+            params[key] = ll
+        return Ray(**params, _one=self._one)
+
+
+@jdc.pytree_dataclass
+class RayMatrix:
+    matrix: jnp.ndarray
+
+    @classmethod
+    def from_rays(cls, rays: Collection[Ray]) -> "RayMatrix":
+        vecs = tuple(jnp.array((r.x, r.y, r.dx, r.dy, r._one)) for r in rays)
+        return cls(matrix=jnp.stack(vecs, axis=0))
+
+    def to_rays(self) -> Collection[Ray]:
+        res = tuple(
+            Ray(x=v[0], y=v[1], z=v[2], dx=v[3], dy=v[4], _one=v[5])
+            for v in self.matrix
+        )
+        return res
+
+
+def unwrap(ray: Ray) -> jnp.ndarray:
+    return RayMatrix.from_rays((ray, )).matrix[0]
+
+
+def wrap(vec: jnp.ndarray) -> Ray:
+    rays = RayMatrix(
+        matrix=jnp.stack((vec, ), axis=0)
+    )
+    return rays.to_rays()[0]
+
+
+@jdc.pytree_dataclass
+class OldRay:
     z: float
     matrix: jnp.ndarray  # Shape (5,) vector [x, y, dx, dy, 1]
     pathlength: float

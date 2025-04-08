@@ -1,11 +1,13 @@
+from abc import ABC, abstractmethod
+
+import jax
 import jax_dataclasses as jdc
 import jax.numpy as jnp
-from jax.numpy import ndarray as NDArray
 from typing import (
-    Tuple
+    Tuple, Callable
 )
 
-from .ray import Ray, propagate, ray_matrix
+from .ray import Ray, RayMatrix, wrap, unwrap, propagate, ray_matrix
 from .coordinate_transforms import apply_transformation, pixels_to_metres_transform
 from . import (
     Degrees, Coords_XY, Scale_YX, Coords_YX, Pixels_YX, Shape_YX
@@ -15,104 +17,181 @@ from typing_extensions import TypeAlias
 Radians: TypeAlias = jnp.float64  # type: ignore
 EPS = 1e-12
 
+
+class Component(ABC):
+    @abstractmethod
+    def step(self, ray: Ray) -> Ray:
+        pass
+
+    @abstractmethod
+    def pathlength(self, ray: Ray) -> float:
+        pass
+
+
+def _naked_step(component: Component) -> Callable[[jnp.ndarray], jnp.ndarray]:
+    '''
+    Derive a function that maps a ray vector to a ray vector
+    so that the derivative is nice and clean, without the classes etc.
+    '''
+    def wrapper(vec: jnp.ndarray) -> jnp.ndarray:
+        ray = wrap(vec)
+        res = component.step(ray)
+        return unwrap(res)
+
+    return wrapper
+
+
+class LinearComponent(Component):
+    def validate(self):
+        wrapped = _naked_step(component=self)
+        hessian = jax.jacobian(jax.jacobian(wrapped))
+        # Just have to make sure we are not in a step-wise function or sth like that...
+        # TODO take some shots at this to try make a naughty function pass
+        sample = Ray(
+            x=0., y=0., dx=0., dy=0.
+        )
+        hess = hessian(unwrap(sample))
+        if jnp.any(hess != 0.):
+            raise ValueError('Second derivative of step() is not zero: Not a linear function.')
+
+
 @jdc.pytree_dataclass
-class Lens:
-    z: float
+class MatrixComponent:
+    matrix: jnp.ndarray
+
+    @classmethod
+    def from_component(cls, component: LinearComponent) -> "MatrixComponent":
+        # Make sure it is actually linear
+        component.validate()
+        # We calculate the Jacobian of a function
+        # that maps ndarray to ndarray so that we get a clean matrix as a result
+        # Since we make sure it is a linear function of the ray,
+        # the Jacobian is the transfer matrix of the component
+        jac = jax.jacobian(_naked_step(component=component))
+
+        # Any ray will do
+        sample = Ray(
+            x=1., y=2., dx=4., dy=5.
+        )
+        # Get the Jacobian which is the transfer matrix
+        mat = jac(unwrap(sample))
+        # ...et voila, we can make a MatrixComponent from that
+        # transfer matrix
+        return cls(mat.T)
+
+    def step(self, rays: RayMatrix) -> RayMatrix:
+        return RayMatrix(rays.matrix @ self.matrix)
+
+
+@jdc.pytree_dataclass
+class Identity(LinearComponent):
+    def step(self, ray: Ray) -> Ray:
+        return ray
+
+    def pathlength(self, ray):
+        return 0
+
+
+@jdc.pytree_dataclass
+class FreeSpace(LinearComponent):
+    length: float
+
+    def step(self, ray: Ray) -> Ray:
+        return ray.modify(
+            x=ray.x + self.length * ray.dx,
+            y=ray.y + self.length * ray.dy,
+        )
+
+    def pathlength(self, ray: Ray) -> float:
+        return self.length * jnp.linalg.norm(
+            jnp.array((1, ray.dx, ray.dy))
+        )
+
+
+@jdc.pytree_dataclass
+class Lens(LinearComponent):
     focal_length: float
 
-    def step(self, ray: Ray):
-        f = self.focal_length
+    def step(self, ray: Ray) -> Ray:
+        return ray.modify(
+            dx=ray.dx - ray.x / self.focal_length,
+            dy=ray.dy - ray.y / self.focal_length
+        )
 
-        x, y, dx, dy = ray.x, ray.y, ray.dx, ray.dy
-
-        new_dx = -x / f + dx
-        new_dy = -y / f + dy
-
-        pathlength = ray.pathlength - (x ** 2 + y ** 2) / (2 * f)
-
-        Ray = ray_matrix(x, y, new_dx, new_dy,
-                        ray.z,
-                        pathlength)
-        return Ray
+    def pathlength(self, ray: Ray) -> float:
+        return -(ray.x**2 + ray.y**2) / (2 * self.focal_length)
 
 
 @jdc.pytree_dataclass
-class ThickLens:
-    z_po: float
-    z_pi: float
-    focal_length: float
+class ThickLens(Lens):
+    thickness: float
 
     def step(self, ray: Ray):
-        f = self.focal_length
-
-        x, y, dx, dy = ray.x, ray.y, ray.dx, ray.dy
-
-        new_dx = -x / f + dx
-        new_dy = -y / f + dy
-
-        pathlength = ray.pathlength - (x ** 2 + y ** 2) / (2 * f)
-
-        new_z = ray.z - (self.z_po - self.z_pi)
-        Ray = ray_matrix(x, y, new_dx, new_dy,
-                        new_z,
-                        pathlength)
-        return Ray
-
-    @property
-    def z(self):
-        return self.z_po
+        thin_ray = super().step(ray)
+        return thin_ray.modify(
+            z=thin_ray.z + self.thickness * thin_ray._one
+        )
 
 
 @jdc.pytree_dataclass
-class Descanner:
-    z: float
+class Shifter(LinearComponent):
     offset_x: float
     offset_y: float
-    descan_error: jnp.ndarray
 
     def step(self, ray: Ray):
-        offset_x, offset_y = self.offset_x, self.offset_y
+        return ray.modify(
+            x=ray.x + self.offset_x * ray._one,
+            y=ray.y + self.offset_y * ray._one,
+        )
 
-        (descan_error_xx, descan_error_xy, descan_error_yx, descan_error_yy,
-         descan_error_dxx, descan_error_dxy, descan_error_dyx, descan_error_dyy) = self.descan_error
-
-        descan_error_xx = 1.0 + descan_error_xx
-        descan_error_yy = 1.0 + descan_error_yy
-
-        x, y, dx, dy = ray.x, ray.y, ray.dx, ray.dy
-
-        new_x = x * descan_error_xx + descan_error_xy * y + offset_x
-        new_y = y * descan_error_yy + descan_error_yx * x + offset_y
-
-        new_dx = dx + x * descan_error_dxx + y * descan_error_dxy
-        new_dy = dy + y * descan_error_dyy + x * descan_error_dyx
-
-        pathlength = ray.pathlength - (offset_x * x) - (offset_y * y)
-
-        Ray = ray_matrix(new_x, new_y, new_dx, new_dy,
-                         ray.z,
-                         pathlength)
-        return Ray
+    def pathlength(self, ray):
+        return -(self.offset_x * ray.x) - (self.offset_y * ray.y)
 
 
 @jdc.pytree_dataclass
-class Deflector:
-    z: float
-    def_x: float
-    def_y: float
+class Tilter(LinearComponent):
+    tilt_x: float
+    tilt_y: float
 
     def step(self, ray: Ray):
+        return ray.modify(
+            dx=ray.dx + self.tilt_x * ray._one,
+            dy=ray.dy + self.tilt_y * ray._one,
+        )
 
-        x, y, dx, dy = ray.x, ray.y, ray.dx, ray.dy
-        new_dx = dx + self.def_x
-        new_dy = dy + self.def_y
+    def pathlength(self, ray):
+        return 0.
 
-        pathlength = ray.pathlength + dx * x + dy * y
 
-        Ray = ray_matrix(x, y, new_dx, new_dy,
-                        ray.z,
-                        pathlength)
-        return Ray
+@jdc.pytree_dataclass
+class DescanError:
+    xx: float = 0.
+    xy: float = 0.
+    yx: float = 0.
+    yy: float = 0.
+    dxx: float = 0.
+    dxy: float = 0.
+    dyx: float = 0.
+    dyy: float = 0.
+
+
+def scan_descan_triplet(offset_x: float, offset_y: float, descan_error: DescanError) \
+        -> tuple[LinearComponent, LinearComponent, LinearComponent]:
+    scan = Shifter(offset_x=offset_x, offset_y=offset_y)
+    descan = Shifter(
+        offset_x=-offset_x
+        + offset_x * descan_error.xx
+        + offset_y * descan_error.xy,
+        offset_y=-offset_y
+        + offset_x * descan_error.yx
+        + offset_y * descan_error.yy,
+    )
+    tilt = Tilter(
+        tilt_x=offset_x * descan_error.dxx + offset_y * descan_error.dxy,
+        tilt_y=offset_x * descan_error.dyx + offset_y * descan_error.dyy,
+    )
+    return (scan, descan, tilt)
+
 
 @jdc.pytree_dataclass
 class Rotator:
@@ -137,11 +216,12 @@ class Rotator:
                         pathlength)
         return Ray
 
+
 @jdc.pytree_dataclass
 class DoubleDeflector:
     z: float
-    first: Deflector
-    second: Deflector
+    first: Tilter
+    second: Tilter
 
     def step(self, ray: Ray):
         ray = self.first.step(ray)
@@ -184,7 +264,7 @@ class ScanGrid:
         object.__setattr__(self, "pixels_to_metres_mat", self.get_pixels_to_metres_transform())
 
     @property
-    def coords(self) -> NDArray:
+    def coords(self) -> jnp.ndarray:
         return self.get_coords()
 
 
@@ -211,7 +291,7 @@ class ScanGrid:
         return scan_coords_xy
     
 
-    def get_metres_to_pixels_transform(self) -> NDArray:
+    def get_metres_to_pixels_transform(self) -> jnp.ndarray:
         centre = self.scan_centre
         step = self.scan_step
         shape = self.scan_shape
@@ -222,7 +302,7 @@ class ScanGrid:
         return metres_to_pixels_mat
     
 
-    def get_pixels_to_metres_transform(self) -> NDArray:
+    def get_pixels_to_metres_transform(self) -> jnp.ndarray:
         centre = self.scan_centre
         step = self.scan_step
         shape = self.scan_shape
@@ -344,7 +424,7 @@ class Detector:
 
 
     @property
-    def coords(self) -> NDArray:
+    def coords(self) -> jnp.ndarray:
         return self.get_coords()
 
 
@@ -371,7 +451,7 @@ class Detector:
         return det_coords_xy
     
 
-    def get_metres_to_pixels_transform(self) -> NDArray:
+    def get_metres_to_pixels_transform(self) -> jnp.ndarray:
         centre = self.det_centre
         step = self.det_pixel_size
         shape = self.det_shape
@@ -381,7 +461,7 @@ class Detector:
 
         return metres_to_pixels_mat
     
-    def get_pixels_to_metres_transform(self) -> NDArray:
+    def get_pixels_to_metres_transform(self) -> jnp.ndarray:
         centre = self.det_centre
         step = self.det_pixel_size
         shape = self.det_shape
