@@ -1,4 +1,3 @@
-import abc
 from jax.numpy import ndarray as NDArray
 import jax.numpy as jnp
 import jax.lax as lax
@@ -7,28 +6,27 @@ from . import Degrees, Radians, Shape_YX, Coords_XY, Scale_YX, Pixels_YX
 RadiansJNP = jnp.float64
 
 
-class GridBase(abc.ABC):
-    metres_to_pixels_mat: jnp.ndarray
-    pixels_to_metres_mat: jnp.ndarray
-
-    def __post_init__(self):
-        object.__setattr__(
-            self, "metres_to_pixels_mat", self.get_metres_to_pixels_transform()
-        )
-        object.__setattr__(
-            self, "pixels_to_metres_mat", self.get_pixels_to_metres_transform()
-        )
+class GridBase:
 
     @property
-    @abc.abstractmethod
+    def pixels_to_metres_mat(self) -> NDArray:
+        return pixels_to_metres_transform(
+                    self.centre, self.pixel_size, self.shape, self.flip, self.rotation
+                )
+
+    @property
+    def metres_to_pixels_mat(self) -> NDArray:
+        return jnp.linalg.inv(pixels_to_metres_transform(
+                    self.centre, self.pixel_size, self.shape, self.flip, self.rotation
+                ))
+
+    @property
     def pixel_size(self) -> Scale_YX: ...
 
     @property
-    @abc.abstractmethod
     def shape(self) -> Shape_YX: ...
 
     @property
-    @abc.abstractmethod
     def rotation(self) -> Degrees: ...
 
     @property
@@ -36,7 +34,6 @@ class GridBase(abc.ABC):
         return (0., 0.)
 
     @property
-    @abc.abstractmethod
     def flip(self) -> bool: ...
 
     def get_coords(self) -> NDArray:

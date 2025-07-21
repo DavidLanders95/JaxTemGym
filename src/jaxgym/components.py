@@ -10,25 +10,30 @@ Radians: TypeAlias = jnp.float64  # type: ignore
 EPS = 1e-12
 
 
+def lens(ray: Ray, z: float, focal_length: float) -> Ray:
+
+    f = focal_length
+
+    x, y, dx, dy = ray.x, ray.y, ray.dx, ray.dy
+
+    new_dx = -x / f + dx
+    new_dy = -y / f + dy
+
+    pathlength = ray.pathlength - (x**2 + y**2) / (2 * f)
+    one = ray._one * 1.0
+
+    return Ray(
+            x=x, y=y, dx=new_dx, dy=new_dy, _one=one, pathlength=pathlength, z=ray.z
+        )
+
+
 @jdc.pytree_dataclass
 class Lens:
     z: float
     focal_length: float
 
     def step(self, ray: Ray):
-        f = self.focal_length
-
-        x, y, dx, dy = ray.x, ray.y, ray.dx, ray.dy
-
-        new_dx = -x / f + dx
-        new_dy = -y / f + dy
-
-        pathlength = ray.pathlength - (x**2 + y**2) / (2 * f)
-        one = ray._one * 1.0
-
-        return Ray(
-            x=x, y=y, dx=new_dx, dy=new_dy, _one=one, pathlength=pathlength, z=ray.z
-        )
+        return lens(ray, *self)
 
 
 @jdc.pytree_dataclass

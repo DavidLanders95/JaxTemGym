@@ -1,12 +1,11 @@
+from dataclasses import dataclass
 import jax.numpy as jnp
-import jax_dataclasses as jdc
 
 from jaxgym.ray import Ray
 from jaxgym.coordinate_transforms import GridBase
 from jaxgym import Degrees, Coords_XY, Scale_YX, Shape_YX
 
 
-@jdc.pytree_dataclass
 class PointSource:
     z: float
     semi_conv: float
@@ -15,14 +14,11 @@ class PointSource:
         return ray
 
 
-@jdc.pytree_dataclass
 class ScanGrid(GridBase):
     z: float
     scan_step: Scale_YX
     scan_shape: Shape_YX
     scan_rotation: Degrees
-    metres_to_pixels_mat: jnp.ndarray = jdc.field(init=False)
-    pixels_to_metres_mat: jnp.ndarray = jdc.field(init=False)
 
     @property
     def pixel_size(self) -> Scale_YX:
@@ -41,7 +37,6 @@ class ScanGrid(GridBase):
         return False
 
 
-@jdc.pytree_dataclass
 class Descanner:
     z: float
     scan_pos_x: float
@@ -143,14 +138,11 @@ class Descanner:
         )
 
 
-@jdc.pytree_dataclass
 class Detector(GridBase):
     z: float
     det_pixel_size: Scale_YX
     det_shape: Shape_YX
     flip_y: bool = False
-    metres_to_pixels_mat: jnp.ndarray = jdc.field(init=False)
-    pixels_to_metres_mat: jnp.ndarray = jdc.field(init=False)
 
     @property
     def pixel_size(self) -> Scale_YX:
