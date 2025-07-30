@@ -12,6 +12,24 @@ class Ray:
     pathlength: float
     _one: float = 1.0
 
+    def derive(
+            self, x: float = None, y: float = None, dx: float = None, dy: float = None,
+            z: float = None, pathlength: float = None) -> 'Ray':
+        '''
+        Return a modified copy.
+
+        Use this to modify some parameters while keeping others as-is
+        '''
+        return Ray(
+            x=x if x is not None else self.x,
+            y=y if y is not None else self.y,
+            dx=dx if dx is not None else self.dx,
+            dy=dy if dy is not None else self.dy,
+            z=z if z is not None else self.z,
+            pathlength=pathlength if pathlength is not None else self.pathlength,
+            _one=self._one,
+        )
+
 
 def propagate_dir_cosine(distance, ray):
     # This method implements propagation using direction cosines
@@ -31,18 +49,5 @@ def propagate_dir_cosine(distance, ray):
         _one=1.0 * ray._one,
         z=ray.z * ray._one + distance,
         pathlength=ray.pathlength + opl,
-    )
-    return new_ray
-
-
-def propagate(distance, ray):
-    new_ray = Ray(
-        x=ray.x + ray.dx * distance,
-        y=ray.y + ray.dy * distance,
-        dx=ray.dx,
-        dy=ray.dy,
-        _one=ray._one,
-        z=ray.z + distance,
-        pathlength=ray.pathlength + distance,
     )
     return new_ray

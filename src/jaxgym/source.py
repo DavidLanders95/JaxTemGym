@@ -1,7 +1,9 @@
-from .utils import concentric_rings, initial_matrix, random_coords, calculate_wavelength
-from .ray import Ray
 import jax.numpy as jnp
 import jax
+import jax_dataclasses as jdc
+
+from .ray import Ray
+from .utils import concentric_rings, initial_matrix, random_coords, calculate_wavelength
 
 
 def P2R(radii, angles):
@@ -10,6 +12,29 @@ def P2R(radii, angles):
 
 def R2P(x):
     return jnp.abs(x), jnp.angle(x)
+
+
+@jdc.pytree_dataclass
+class Source:
+    def __call__(self, *args, **kwargs) -> Ray:
+        raise NotImplementedError()
+
+
+@jdc.pytree_dataclass
+class PointSource(Source):
+    x: float = 0.
+    y: float = 0.
+
+    def __call__(self, dy, dx, _one: float = 1.):
+        return Ray(
+            x=self.x,
+            y=self.y,
+            dx=dx,
+            dy=dy,
+            z=0.,
+            pathlength=0.,
+            _one=_one,
+        )
 
 
 def ParallelBeam(

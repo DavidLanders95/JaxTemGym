@@ -8,6 +8,10 @@ import jax_dataclasses as jdc
 RadiansJNP = jnp.float64
 
 
+def initial_matrix(*args, **kwargs):
+    raise NotImplementedError()
+
+
 def custom_jacobian_matrix(ray_jac):
     return jnp.array(
         [

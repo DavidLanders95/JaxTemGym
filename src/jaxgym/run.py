@@ -1,7 +1,7 @@
-from .ray import propagate
 import jax
 import jax.numpy as jnp
 import jaxgym.components as comp
+from jaxgym.components import propagate
 from .utils import custom_jacobian_matrix
 
 
